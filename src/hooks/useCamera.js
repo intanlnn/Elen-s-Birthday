@@ -135,7 +135,7 @@ function waitForSettledFrame(
 // This is the same threshold the burst loop uses to stop early
 // (`if (bestScore < BAND_CLEAN_THRESHOLD) break;`), so "hadBand" and the
 // early-exit decision always agree with each other.
-const BAND_CLEAN_THRESHOLD = 6;
+const BAND_CLEAN_THRESHOLD = 18;
 
 export function useCamera({ active }) {
   const videoRef = useRef(null);
@@ -236,14 +236,39 @@ export function useCamera({ active }) {
       rowAverages.push(sum / count);
     }
 
-    const gap = 2;
-    let maxJump = 0;
-    for (let i = 0; i < rowAverages.length - gap; i += 1) {
-      const jump = Math.abs(rowAverages[i + gap] - rowAverages[i]);
-      if (jump > maxJump) maxJump = jump;
+    // A real flicker band is a SPIKE: brightness jumps up (or down) then
+    // returns back within a short run of rows. A natural subject edge —
+    // a hairline, a shoulder, a wall/floor boundary — is a STEP: it jumps
+    // once and STAYS different for the rest of the frame. Scanning for
+    // "jump then reverse within `spikeWindow` rows" instead of just "any
+    // jump" filters out hairlines/silhouettes, which was causing false
+    // positives on plain, well-lit backgrounds.
+    const spikeWindow = Math.max(2, Math.floor(rowAverages.length * 0.06)); // ~6% of sampled rows
+    let maxSpike = 0;
+
+    for (let i = 0; i < rowAverages.length; i += 1) {
+      const base = rowAverages[i];
+      let localMax = base;
+      let localMin = base;
+      const end = Math.min(rowAverages.length, i + spikeWindow);
+      for (let j = i; j < end; j += 1) {
+        if (rowAverages[j] > localMax) localMax = rowAverages[j];
+        if (rowAverages[j] < localMin) localMin = rowAverages[j];
+      }
+
+      // Only counts as a spike if brightness both rises AND falls back
+      // close to where it started within the window — i.e. it returns,
+      // rather than settling into a new baseline (a step/edge).
+      const riseThenReturn = localMax - base > 14 && localMax - rowAverages[end - 1] > 10;
+      const dipThenReturn = base - localMin > 14 && rowAverages[end - 1] - localMin > 10;
+
+      if (riseThenReturn || dipThenReturn) {
+        const spikeMagnitude = Math.max(localMax - localMin);
+        if (spikeMagnitude > maxSpike) maxSpike = spikeMagnitude;
+      }
     }
 
-    return maxJump;
+    return maxSpike;
   };
 
   /** Grabs the current video frame as a data URL. Takes a short burst of
