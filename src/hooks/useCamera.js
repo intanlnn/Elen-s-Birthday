@@ -23,8 +23,7 @@ import { useEffect, useRef, useState } from "react";
 // --- Shared exposure/luminance stabilization helpers -----------------
 // Small offscreen canvas reused across calls to cheaply sample average
 // brightness. Downscaled to 32x32 so getImageData stays fast even at
-// 20-30fps. willReadFrequently: this canvas's getImageData runs on every
-// rAF tick while waiting for the camera to settle.
+// 20-30fps.
 const sampleCanvas =
   typeof document !== "undefined" ? document.createElement("canvas") : null;
 if (sampleCanvas) {
@@ -120,21 +119,17 @@ function waitForSettledFrame(
   });
 }
 
-/** Best-effort exposure lock so the camera stops re-hunting once settled.
- * Support is spotty across browsers/devices, so this silently no-ops if
- * unavailable — treat it as a nice-to-have, not a dependency. */
-async function tryLockExposure(stream) {
-  try {
-    const track = stream.getVideoTracks()[0];
-    if (!track) return;
-    const capabilities = track.getCapabilities?.();
-    if (capabilities?.exposureMode?.includes("manual")) {
-      await track.applyConstraints({ advanced: [{ exposureMode: "manual" }] });
-    }
-  } catch {
-    // Not supported on this device/browser — ignore.
-  }
-}
+// NOTE: we intentionally do NOT force the camera into manual exposure
+// mode anymore. `track.applyConstraints({ advanced: [{ exposureMode:
+// "manual" }] })` used to run here right before flipping status to
+// "ready" — but on a lot of Android/Chrome devices, switching to manual
+// exposure without also supplying an explicit exposureTime/
+// exposureCompensation snaps the sensor to a dark default, which is
+// exactly the "bright while loading, dark once ready" symptom. The
+// settle-and-burst logic below already does the real work of avoiding
+// banding, so this was a net-negative "nice to have" — removed rather
+// than fixed, since a reliable cross-browser manual exposure value isn't
+// something we can safely guess.
 
 export function useCamera({ active }) {
   const videoRef = useRef(null);
@@ -147,7 +142,6 @@ export function useCamera({ active }) {
     if (!active) return undefined;
 
     cancelledRef.current = false;
-    let rafId = null;
     setStatus("loading");
     setError(null);
 
@@ -170,8 +164,6 @@ export function useCamera({ active }) {
               isCancelled: () => cancelledRef.current,
             });
             if (cancelledRef.current) return;
-            await tryLockExposure(stream);
-            if (cancelledRef.current) return;
             setStatus("ready");
           };
         }
@@ -184,43 +176,29 @@ export function useCamera({ active }) {
 
     return () => {
       cancelledRef.current = true;
-      if (rafId) cancelAnimationFrame(rafId);
       streamRef.current?.getTracks().forEach((t) => t.stop());
       streamRef.current = null;
     };
   }, [active]);
 
-  /** Waits for the browser's "next full frame presented" signal, falling back
-   * to requestAnimationFrame if unavailable. Used to space out burst shots
-   * so each one is actually a distinct camera frame, not the same buffer. */
-  const nextFrame = (video) =>
-    new Promise((resolve) => {
-      if ("requestVideoFrameCallback" in video) {
-        video.requestVideoFrameCallback(() => resolve());
-      } else {
-        requestAnimationFrame(() => resolve());
-      }
-    });
-
   /** Grabs one frame from the video into a canvas, mirrored to match the
-   * live preview. Draws DIRECTLY from the <video> element — no
-   * createImageBitmap() here. That extra async step used to sit between
-   * "the video says it's ready" and "the bitmap is actually built", and in
-   * that gap the GPU could start writing the *next* decoded frame into the
-   * same texture, so the bitmap ended up holding half the old frame and
-   * half the new one — a torn/banded read, not a lighting problem. Calling
-   * drawImage(video, ...) synchronously, right inside the
-   * requestVideoFrameCallback that guarantees a fresh frame is presented,
-   * removes that gap entirely. */
-  const grabFrame = (video) => {
+   * live preview. Returns the canvas. */
+  const grabFrame = async (video) => {
     const canvas = document.createElement("canvas");
     canvas.width = video.videoWidth;
     canvas.height = video.videoHeight;
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const ctx = canvas.getContext("2d");
 
     ctx.translate(canvas.width, 0);
     ctx.scale(-1, 1);
-    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+    try {
+      const bitmap = await createImageBitmap(video);
+      ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+      bitmap.close();
+    } catch {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    }
 
     return canvas;
   };
@@ -234,7 +212,7 @@ export function useCamera({ active }) {
    * rows a few pixels apart. A clean frame's brightness changes gradually
    * top-to-bottom (a face, a wall); a banded frame has one abrupt seam. */
   const bandingScore = (canvas) => {
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    const ctx = canvas.getContext("2d");
     const { width, height } = canvas;
     const rowStep = Math.max(1, Math.floor(height / 200)); // cap rows sampled
     const colStep = Math.max(1, Math.floor(width / 60)); // cap cols sampled
@@ -252,9 +230,6 @@ export function useCamera({ active }) {
       rowAverages.push(sum / count);
     }
 
-    // Compare rows a small gap apart (not just adjacent) — banding seams
-    // are usually a few pixels tall, so this catches the edge of the band
-    // without being fooled by natural per-row noise.
     const gap = 2;
     let maxJump = 0;
     for (let i = 0; i < rowAverages.length - gap; i += 1) {
@@ -265,92 +240,11 @@ export function useCamera({ active }) {
     return maxJump;
   };
 
-  /** Detects bright horizontal band(s) (the recurring white-stripe artifact)
-   * and repairs them in place. Detection samples every column (not a sparse
-   * stride) so thin or unevenly-lit bands don't get missed by bad luck in
-   * sampling. Repair blends between the clean row just above the band and
-   * the clean row just below it — a linear gradient across the band's
-   * height — instead of flatly tiling a single row, which used to leave a
-   * visible flat-color smear where the band had been. Returns true if a
-   * band was found and patched. */
-  const detectAndRepairBand = (canvas) => {
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    const { width, height } = canvas;
-    const imageData = ctx.getImageData(0, 0, width, height);
-    const { data } = imageData;
-
-    const rowLuma = new Array(height);
-    for (let y = 0; y < height; y += 1) {
-      const rowStart = y * width * 4;
-      let sum = 0;
-      for (let x = 0; x < width; x += 1) {
-        const i = rowStart + x * 4;
-        sum += (data[i] + data[i + 1] + data[i + 2]) / 3;
-      }
-      rowLuma[y] = sum / width;
-    }
-
-    const sorted = [...rowLuma].sort((a, b) => a - b);
-    const median = sorted[Math.floor(sorted.length / 2)];
-
-    // Looser than before on both fronts: rows just need to stand out
-    // clearly from the frame's own median, and be bright in absolute terms
-    // — this catches thinner/dimmer residual stripes that the previous
-    // stricter thresholds let through.
-    const MIN_BAND_HEIGHT = 3;
-    const bands = [];
-    let bandStart = -1;
-    for (let y = 0; y < height; y += 1) {
-      const isBright = rowLuma[y] > median + 28 && rowLuma[y] > 175;
-      if (isBright && bandStart === -1) bandStart = y;
-      if (!isBright && bandStart !== -1) {
-        if (y - bandStart >= MIN_BAND_HEIGHT) bands.push([bandStart, y - 1]);
-        bandStart = -1;
-      }
-    }
-    if (bandStart !== -1 && height - bandStart >= MIN_BAND_HEIGHT) {
-      bands.push([bandStart, height - 1]);
-    }
-
-    if (bands.length === 0) return false;
-
-    bands.forEach(([start, end]) => {
-      const bandHeight = end - start + 1;
-      const aboveY = start > 0 ? start - 1 : null;
-      const belowY = end < height - 1 ? end + 1 : null;
-      const aboveStart = aboveY !== null ? aboveY * width * 4 : null;
-      const belowStart = belowY !== null ? belowY * width * 4 : null;
-
-      for (let y = start; y <= end; y += 1) {
-        const rowStart = y * width * 4;
-        const t = bandHeight === 1 ? 0 : (y - start) / (bandHeight - 1); // 0..1
-
-        if (aboveStart !== null && belowStart !== null) {
-          // Blend linearly between the clean row above and the clean row
-          // below, so the patch fades from one into the other rather than
-          // being a single flat color.
-          for (let x = 0; x < width * 4; x += 1) {
-            data[rowStart + x] =
-              data[aboveStart + x] * (1 - t) + data[belowStart + x] * t;
-          }
-        } else if (aboveStart !== null) {
-          data.copyWithin(rowStart, aboveStart, aboveStart + width * 4);
-        } else if (belowStart !== null) {
-          data.copyWithin(rowStart, belowStart, belowStart + width * 4);
-        }
-      }
-    });
-
-    ctx.putImageData(imageData, 0, 0);
-    return true;
-  };
-
   /** Grabs the current video frame as a data URL. Takes a short burst of
-   * frames and picks the cleanest one (least banding), then runs the
-   * repair pass as a safety net. Returns `{ dataUrl, hadBand }` — `hadBand`
-   * tells the caller whether a band was detected (and patched) in the
-   * chosen frame, so the UI can warn the person to double-check /  retake
-   * rather than silently trusting the auto-repair every time. */
+   * frames and picks the cleanest one (least banding), since a single
+   * webcam frame can randomly land on a flicker seam from screen/room
+   * lighting. The whole burst takes well under a second and the UI only
+   * shows the final picked frame, so this is invisible to the user. */
   const capture = async () => {
     const video = videoRef.current;
     if (!video || video.readyState < 2) return null;
@@ -361,13 +255,15 @@ export function useCamera({ active }) {
     });
 
     const BURST_SIZE = 8;
+    const SPACING_MS = 120;
     let best = null;
     let bestScore = Infinity;
 
     for (let i = 0; i < BURST_SIZE; i += 1) {
       // eslint-disable-next-line no-await-in-loop
-      await nextFrame(video);
-      const canvas = grabFrame(video);
+      await new Promise((r) => setTimeout(r, SPACING_MS));
+      // eslint-disable-next-line no-await-in-loop
+      const canvas = await grabFrame(video);
       const score = bandingScore(canvas);
 
       if (score < bestScore) {
@@ -378,12 +274,8 @@ export function useCamera({ active }) {
       if (bestScore < 6) break;
     }
 
-    if (!best) return null;
-
-    const hadBand = detectAndRepairBand(best);
-
-    return { dataUrl: best.toDataURL("image/jpeg", 0.92), hadBand };
+    return best ? best.toDataURL("image/jpeg", 0.92) : null;
   };
 
-  return { videoRef, status, error, capture, nextFrame };
+  return { videoRef, status, error, capture };
 }
