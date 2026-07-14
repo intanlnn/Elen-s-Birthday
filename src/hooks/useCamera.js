@@ -131,6 +131,12 @@ function waitForSettledFrame(
 // than fixed, since a reliable cross-browser manual exposure value isn't
 // something we can safely guess.
 
+// A picked frame with a banding score below this is considered "clean".
+// This is the same threshold the burst loop uses to stop early
+// (`if (bestScore < BAND_CLEAN_THRESHOLD) break;`), so "hadBand" and the
+// early-exit decision always agree with each other.
+const BAND_CLEAN_THRESHOLD = 6;
+
 export function useCamera({ active }) {
   const videoRef = useRef(null);
   const streamRef = useRef(null);
@@ -244,7 +250,12 @@ export function useCamera({ active }) {
    * frames and picks the cleanest one (least banding), since a single
    * webcam frame can randomly land on a flicker seam from screen/room
    * lighting. The whole burst takes well under a second and the UI only
-   * shows the final picked frame, so this is invisible to the user. */
+   * shows the final picked frame, so this is invisible to the user.
+   *
+   * Returns `{ dataUrl, hadBand }` — NOT a bare string. `hadBand` tells
+   * the caller whether even the best frame in the burst still crossed the
+   * banding threshold, so the UI can warn the user to double check /
+   * retake instead of silently trusting the auto-pick. */
   const capture = async () => {
     const video = videoRef.current;
     if (!video || video.readyState < 2) return null;
@@ -271,10 +282,15 @@ export function useCamera({ active }) {
         best = canvas;
       }
 
-      if (bestScore < 6) break;
+      if (bestScore < BAND_CLEAN_THRESHOLD) break;
     }
 
-    return best ? best.toDataURL("image/jpeg", 0.92) : null;
+    if (!best) return null;
+
+    return {
+      dataUrl: best.toDataURL("image/jpeg", 0.92),
+      hadBand: bestScore >= BAND_CLEAN_THRESHOLD,
+    };
   };
 
   return { videoRef, status, error, capture };
