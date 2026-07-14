@@ -60,21 +60,6 @@ Happy Birthday, I love you. Semoga kamu selalu bahagia ya, Delen.`,
 
 export const FRAMES = [
   {
-    id: "gold-elegance",
-    name: "Golden Elegance",
-    src: "/assets/frames/frame-gold-elegance.png",
-  },
-  {
-    id: "pink-blossom",
-    name: "Pink Blossom",
-    src: "/assets/frames/frame-pink-blossom.png",
-  },
-  {
-    id: "ivory-classic",
-    name: "Ivory Classic",
-    src: "/assets/frames/frame-ivory-classic.png",
-  },
-  {
     id: "amplop",
     name: "Amplop",
     src: "/assets/frames/amplop.png",
