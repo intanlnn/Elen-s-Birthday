@@ -1,0 +1,165 @@
+@import "tailwindcss";
+
+@theme {
+  /* ---- Palette ---- */
+  --color-ivory: #FDFBF8;
+  --color-soft-pink: #F8E8EE;
+  --color-beige: #EFE6DD;
+  --color-gold: #C8A97E;
+  --color-gold-dark: #B08D5F;
+  --color-ink: #4A3F3A;
+
+  /* ---- Fonts ---- */
+  --font-script: "Great Vibes", "Allura", cursive;
+  --font-heading: "Cormorant Garamond", serif;
+  --font-body: "Poppins", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  margin: 0;
+  background-color: var(--color-ivory);
+  color: var(--color-ink);
+  font-family: var(--font-body);
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-track {
+  background: var(--color-ivory);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-gold);
+  border-radius: 999px;
+}
+
+/* ---------- Reusable utility classes ---------- */
+
+.font-script {
+  font-family: var(--font-script);
+}
+.font-heading {
+  font-family: var(--font-heading);
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.55);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.glass-dark {
+  background: rgba(74, 63, 58, 0.35);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.shadow-soft {
+  box-shadow: 0 10px 40px -12px rgba(200, 169, 126, 0.35), 0 4px 12px -4px rgba(74, 63, 58, 0.08);
+}
+
+.shadow-soft-lg {
+  box-shadow: 0 30px 60px -15px rgba(200, 169, 126, 0.4), 0 10px 25px -8px rgba(74, 63, 58, 0.12);
+}
+
+.btn-gold {
+  font-family: var(--font-body);
+  letter-spacing: 0.04em;
+  background: linear-gradient(135deg, #C8A97E 0%, #DDBD91 50%, #C8A97E 100%);
+  color: #fff;
+  transition: transform 0.35s ease, box-shadow 0.35s ease, filter 0.35s ease;
+}
+.btn-gold:hover {
+  transform: translateY(-2px) scale(1.02);
+  filter: brightness(1.05);
+  box-shadow: 0 15px 30px -8px rgba(200, 169, 126, 0.55);
+}
+.btn-gold:active {
+  transform: translateY(0) scale(0.98);
+}
+
+/* ---------- Keyframe animations ---------- */
+
+@keyframes float-slow {
+  0%, 100% { transform: translateY(0) translateX(0) rotate(0deg); }
+  50% { transform: translateY(-18px) translateX(6px) rotate(6deg); }
+}
+@keyframes float-slower {
+  0%, 100% { transform: translateY(0) translateX(0) rotate(0deg); }
+  50% { transform: translateY(-28px) translateX(-10px) rotate(-8deg); }
+}
+@keyframes sparkle-pulse {
+  0%, 100% { opacity: 0.2; transform: scale(0.8); }
+  50% { opacity: 1; transform: scale(1.15); }
+}
+@keyframes fade-in-up {
+  from { opacity: 0; transform: translateY(24px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes fade-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes scale-in {
+  from { opacity: 0; transform: scale(0.92); }
+  to { opacity: 1; transform: scale(1); }
+}
+@keyframes camera-flash {
+  0% { opacity: 0; }
+  10% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+@keyframes confetti-fall {
+  0% { transform: translateY(-10px) rotate(0deg); opacity: 1; }
+  100% { transform: translateY(400px) rotate(360deg); opacity: 0; }
+}
+
+.animate-float-slow { animation: float-slow 7s ease-in-out infinite; }
+.animate-float-slower { animation: float-slower 9s ease-in-out infinite; }
+.animate-sparkle { animation: sparkle-pulse 3.2s ease-in-out infinite; }
+.animate-fade-in-up { animation: fade-in-up 0.9s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-fade-in { animation: fade-in 1s ease both; }
+.animate-scale-in { animation: scale-in 0.6s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.animate-camera-flash { animation: camera-flash 0.45s ease-out; }
+
+.delay-100 { animation-delay: 0.1s; }
+.delay-200 { animation-delay: 0.2s; }
+.delay-300 { animation-delay: 0.3s; }
+.delay-400 { animation-delay: 0.4s; }
+.delay-500 { animation-delay: 0.5s; }
+.delay-700 { animation-delay: 0.7s; }
+
+/* Reveal-on-scroll helper (paired with an IntersectionObserver hook) */
+.reveal {
+  opacity: 0;
+  transform: translateY(30px);
+  transition: opacity 0.9s cubic-bezier(0.22, 1, 0.36, 1), transform 0.9s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reveal.reveal-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+  }
+}
